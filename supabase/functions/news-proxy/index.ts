@@ -1,9 +1,15 @@
 // verify_jwt = true (set in config.toml) — only requests bearing a valid Supabase JWT reach this function
+import { createClient } from "npm:@supabase/supabase-js@2";
+
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
   "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Client-Info, Apikey",
 };
+
+// 30 requests per 60-second window per IP
+const RATE_LIMIT = 30;
+const WINDOW_SECONDS = 60;
 
 const FEEDS: Record<string, { url: string; source: string }[]> = {
   germany: [
@@ -65,6 +71,32 @@ Deno.serve(async (req: Request) => {
   }
 
   try {
+    // Rate limiting: identify caller IP from standard proxy headers
+    const ip =
+      req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ??
+      req.headers.get("x-real-ip") ??
+      "unknown";
+
+    const supabase = createClient(
+      Deno.env.get("SUPABASE_URL")!,
+      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
+    );
+
+    const { data: requestCount, error: rlError } = await supabase.rpc(
+      "increment_rate_limit",
+      { p_ip: ip, p_window_seconds: WINDOW_SECONDS },
+    );
+
+    if (rlError) {
+      // Log but don't block on rate-limit errors to keep the app working
+      console.error("Rate limit check failed:", rlError.message);
+    } else if (requestCount > RATE_LIMIT) {
+      return new Response(
+        JSON.stringify({ error: "Too many requests. Please slow down." }),
+        { status: 429, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+      );
+    }
+
     const url = new URL(req.url);
     const variant = url.searchParams.get("variant") ?? "germany";
 
@@ -77,7 +109,7 @@ Deno.serve(async (req: Request) => {
 
     const feeds = FEEDS[variant];
     const results = await Promise.all(feeds.map((f) => fetchFeed(f.url, f.source)));
-    let all = results.flat();
+    const all = results.flat();
 
     const keywords = variant === "germany" ? GERMANY_KEYWORDS : AI_KEYWORDS;
     const filtered = all.filter((item) => {
@@ -85,7 +117,6 @@ Deno.serve(async (req: Request) => {
       return keywords.some((k) => lower.includes(k));
     });
 
-    // De-duplicate by title, prefer filtered first
     const unique = new Map<string, FeedItem>();
     for (const item of [...filtered, ...all]) {
       if (!unique.has(item.title)) unique.set(item.title, item);
