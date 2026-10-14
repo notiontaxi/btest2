@@ -5,15 +5,21 @@ export interface NewsItem {
   source: string;
 }
 
-const PROXY_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/news-proxy`;
+const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL ?? 'https://mslpwbnpahabfzkgowbv.supabase.co';
+const PROXY_URL = `${SUPABASE_URL}/functions/v1/news-proxy`;
 const ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY;
 
 async function fetchFromProxy(variant: 'germany' | 'ai'): Promise<NewsItem[]> {
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+  };
+
+  if (ANON_KEY) {
+    headers.Authorization = `Bearer ${ANON_KEY}`;
+  }
+
   const res = await fetch(`${PROXY_URL}?variant=${variant}`, {
-    headers: {
-      Authorization: `Bearer ${ANON_KEY}`,
-      'Content-Type': 'application/json',
-    },
+    headers,
   });
   if (!res.ok) throw new Error(`Proxy error (${res.status})`);
   const json = await res.json();
