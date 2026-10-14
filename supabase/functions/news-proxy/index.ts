@@ -1,3 +1,4 @@
+// verify_jwt = true (set in config.toml) — only requests bearing a valid Supabase JWT reach this function
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
