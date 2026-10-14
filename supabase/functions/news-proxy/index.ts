@@ -1,0 +1,104 @@
+const corsHeaders = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
+  "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Client-Info, Apikey",
+};
+
+const FEEDS: Record<string, { url: string; source: string }[]> = {
+  germany: [
+    { url: "https://feeds.bbci.co.uk/news/world/europe/rss.xml", source: "BBC Europe" },
+    { url: "https://rss.dw.com/rdf/rss-en-all", source: "DW" },
+  ],
+  ai: [
+    { url: "https://feeds.bbci.co.uk/news/technology/rss.xml", source: "BBC Tech" },
+    { url: "https://techcrunch.com/feed/", source: "TechCrunch" },
+  ],
+};
+
+const GERMANY_KEYWORDS = ["german", "germany", "berlin", "merkel", "bundes", "europe", "european", "eu"];
+const AI_KEYWORDS = [
+  "ai", "artificial intelligence", "machine learning", "neural", "gpt", "llm",
+  "chatbot", "openai", "deepmind", "robotics", "gemini", "copilot", "anthropic",
+  "model", "algorithm", "generative",
+];
+
+interface FeedItem {
+  title: string;
+  link: string;
+  pubDate: string;
+  source: string;
+}
+
+function parseItems(xml: string, defaultSource: string): FeedItem[] {
+  const items: FeedItem[] = [];
+  const itemRegex = /<item>([\s\S]*?)<\/item>/g;
+  let match: RegExpExecArray | null;
+  while ((match = itemRegex.exec(xml)) !== null) {
+    const block = match[1];
+    const title = (block.match(/<title>(?:<!\[CDATA\[)?([\s\S]*?)(?:\]\]>)?<\/title>/) ?? [])[1]?.trim() ?? "";
+    const link =
+      (block.match(/<link>(?:<!\[CDATA\[)?([\s\S]*?)(?:\]\]>)?<\/link>/) ?? [])[1]?.trim() ??
+      (block.match(/<guid[^>]*>(?:<!\[CDATA\[)?([\s\S]*?)(?:\]\]>)?<\/guid>/) ?? [])[1]?.trim() ??
+      "";
+    const pubDate = (block.match(/<pubDate>([\s\S]*?)<\/pubDate>/) ?? [])[1]?.trim() ?? "";
+    const source = (block.match(/<source[^>]*>([\s\S]*?)<\/source>/) ?? [])[1]?.trim() ?? defaultSource;
+    if (title && link) items.push({ title, link, pubDate, source });
+  }
+  return items;
+}
+
+async function fetchFeed(url: string, source: string): Promise<FeedItem[]> {
+  try {
+    const res = await fetch(url, { headers: { "User-Agent": "BerlinDashboard/1.0" } });
+    if (!res.ok) return [];
+    const text = await res.text();
+    return parseItems(text, source);
+  } catch {
+    return [];
+  }
+}
+
+Deno.serve(async (req: Request) => {
+  if (req.method === "OPTIONS") {
+    return new Response(null, { status: 200, headers: corsHeaders });
+  }
+
+  try {
+    const url = new URL(req.url);
+    const variant = url.searchParams.get("variant") ?? "germany";
+
+    if (variant !== "germany" && variant !== "ai") {
+      return new Response(JSON.stringify({ error: "Invalid variant" }), {
+        status: 400,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
+    const feeds = FEEDS[variant];
+    const results = await Promise.all(feeds.map((f) => fetchFeed(f.url, f.source)));
+    let all = results.flat();
+
+    const keywords = variant === "germany" ? GERMANY_KEYWORDS : AI_KEYWORDS;
+    const filtered = all.filter((item) => {
+      const lower = item.title.toLowerCase();
+      return keywords.some((k) => lower.includes(k));
+    });
+
+    // De-duplicate by title, prefer filtered first
+    const unique = new Map<string, FeedItem>();
+    for (const item of [...filtered, ...all]) {
+      if (!unique.has(item.title)) unique.set(item.title, item);
+    }
+    const final = Array.from(unique.values()).slice(0, 10);
+
+    return new Response(JSON.stringify({ items: final }), {
+      status: 200,
+      headers: { ...corsHeaders, "Content-Type": "application/json" },
+    });
+  } catch (err) {
+    return new Response(JSON.stringify({ error: (err as Error).message }), {
+      status: 500,
+      headers: { ...corsHeaders, "Content-Type": "application/json" },
+    });
+  }
+});
