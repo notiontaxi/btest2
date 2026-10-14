@@ -1,4 +1,4 @@
-// verify_jwt = true (set in config.toml) — only requests bearing a valid Supabase JWT reach this function
+// Requests are protected by the database-backed IP rate limiter below.
 import { createClient } from "npm:@supabase/supabase-js@2";
 
 const corsHeaders = {
